@@ -1,3 +1,15 @@
+**Groovy MiSTer NLC Fork**
+This fork adds Groovy Mister NLC support to flycast dojo, and is compatible with Fightcade.
+Video, controls and audio are all supported.
+
+See https://github.com/verbst/Groovy_MiSTer for information on setting up MiSTer.
+Use the new MiSTer menu for configuring flycast, and the Controls panel for setting button configurations.
+
+<img width="640" height="512" alt="1" src="https://github.com/user-attachments/assets/3fdef3eb-6eff-4ea3-b4da-8eeef2c36874" />
+<img width="640" height="513" alt="2" src="https://github.com/user-attachments/assets/a8f2ece2-e823-49a9-ad65-0182dbed4edd" />
+
+
+
 <p align="center"><img src="FlycastDojoFoxlum.png" alt="Flycast Dojo Logo" width="243" height="283"><br /><i>Logo Credit: <a href="https://github.com/Foxlum">@Foxlum</a></i></p>
 <h1 align="center">Flycast Dojo</h1>
  
