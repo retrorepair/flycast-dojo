@@ -1,5 +1,8 @@
 #include "audiostream.h"
 #include "cfg/option.h"
+#ifdef USE_GROOVY
+#include "rend/groovy/groovy_output.h"
+#endif
 
 struct SoundFrame { s16 l; s16 r; };
 
@@ -52,6 +55,21 @@ void WriteSample(s16 r, s16 l)
 
 	if (++writePtr == SAMPLE_COUNT)
 	{
+#ifdef USE_GROOVY
+		// Mirror this chunk to the MiSTer. Here rather than per sample: this
+		// site is reached once per 512 frames (~86/s), so the staging lock is
+		// free, and SoundFrame is {l, r} - signed 16-bit LE stereo interleaved
+		// at 44100Hz, which is exactly the wire format, so nothing is converted.
+		//
+		// Rollback-safe by construction: sgc_if.cpp returns before WriteSample
+		// when settings.aica.muteAudio is set, which is what
+		// ggpo::advance_frame() does around a re-simulation.
+		if (groovy::submitAudio(Buffer, SAMPLE_COUNT))
+			// "MiSTer only": silence our copy, but still push it, so the host
+			// backend's play cursor keeps advancing for its underrun logic.
+			// After submitAudio, so the MiSTer gets the real samples.
+			memset(Buffer, 0, sizeof(Buffer));
+#endif
 		if (currentBackend != nullptr)
 			currentBackend->push(Buffer, SAMPLE_COUNT, config::LimitFPS);
 		writePtr = 0;

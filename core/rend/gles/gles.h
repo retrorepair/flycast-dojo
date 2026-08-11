@@ -427,6 +427,10 @@ struct OpenGLRenderer : Renderer
 
 	BaseTextureCacheData *GetTexture(TSP tsp, TCW tcw) override;
 
+#ifdef USE_GROOVY
+	bool ReadFrame(u8 *dst, int width, int height) override;
+#endif
+
 	bool Present() override
 	{
 		if (!frameRendered)
@@ -465,6 +469,12 @@ private:
 
 protected:
 	bool frameRendered = false;
+#ifdef USE_GROOVY
+	// Staging for ReadFrame's row reversal. Held across frames so the 60Hz path
+	// does not allocate; glReadPixels cannot write rows in reverse order, and
+	// calling it per row would be far worse than one extra full-frame copy.
+	std::vector<u8> readbackBuffer;
+#endif
 };
 
 void initQuad();

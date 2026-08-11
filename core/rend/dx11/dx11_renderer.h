@@ -52,6 +52,9 @@ struct DX11Renderer : public Renderer
 
 	bool RenderLastFrame() override;
 	void DrawOSD(bool clear_screen) override;
+#ifdef USE_GROOVY
+	bool ReadFrame(u8 *dst, int width, int height) override;
+#endif
 	BaseTextureCacheData *GetTexture(TSP tsp, TCW tcw) override;
 
 protected:
@@ -140,6 +143,14 @@ private:
 	u32 indexBufferSize = 0;
 
 	ComPtr<ID3D11Texture2D> fbTex;
+#ifdef USE_GROOVY
+	// Cached D3D11_USAGE_STAGING texture for ReadFrame, held across frames
+	// because this is a 60Hz path. writeFramebufferToVRAM() creates one per
+	// call, which is fine for an accuracy mode but not for this.
+	ComPtr<ID3D11Texture2D> groovyStagingTex;
+	u32 groovyStagingWidth = 0;
+	u32 groovyStagingHeight = 0;
+#endif
 	ComPtr<ID3D11Texture2D> dcfbTexture;
 	ComPtr<ID3D11ShaderResourceView> dcfbTextureView;
 	ComPtr<ID3D11Texture2D> paletteTexture;

@@ -17,6 +17,10 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "ggpo.h"
+#ifdef USE_GROOVY
+#include "rend/groovy/groovy_input.h"
+#include "rend/groovy/groovy_output.h"
+#endif
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_devs.h"
 #include "input/gamepad_device.h"
@@ -36,6 +40,16 @@ bool inRollback;
 
 static void getLocalInput(MapleInputState inputState[4])
 {
+#ifdef USE_GROOVY
+	// Drain the MiSTer's pads at exactly the point flycast samples LOCAL input,
+	// so they are just another local device feeding the same input word and the
+	// existing determinism guarantees cover them unchanged.
+	//
+	// This is the no-session path (offline, or GGPO not yet up). The live
+	// netplay path is the ggpo_add_local_input loop in nextFrame().
+	groovy::pollInputs();
+	groovy::applyInputs();
+#endif
 	if (!config::ThreadedRendering)
 		UpdateInputState();
 	std::lock_guard<std::mutex> lock(relPosMutex);
@@ -696,6 +710,24 @@ bool nextFrame()
 
 	// may call save_game_state
 	do {
+#ifdef USE_GROOVY
+		// Drain the MiSTer's pads at exactly the point flycast samples LOCAL
+		// input for GGPO, so they are just another local device feeding the
+		// same input word and the existing determinism guarantees cover them
+		// unchanged.
+		//
+		// ROLLBACK-SAFE BY PLACEMENT, and this is the whole reason it is here:
+		// nextFrame() returns at `if (inRollback) return true;` well above this
+		// loop, so a re-simulation never reaches the sample and cannot observe
+		// fresh input. Polling on a timer, or anywhere downstream of this,
+		// would inject new input mid-rollback and desync the match.
+		//
+		// Inside the retry loop deliberately, matching UpdateInputState(): when
+		// the prediction barrier stalls us, the input eventually submitted
+		// should be the freshest available.
+		groovy::pollInputs();
+		groovy::applyInputs();
+#endif
 		if (!config::ThreadedRendering)
 			UpdateInputState();
 		Inputs inputs;

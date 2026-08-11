@@ -22,6 +22,9 @@
 #include "rend/tileclip.h"
 #include "rend/gui.h"
 #include "rend/sorter.h"
+#ifdef USE_GROOVY
+#include "rend/groovy/groovy_capture.h"
+#endif
 
 const u32 DstBlendGL[]
 {
@@ -1090,6 +1093,19 @@ bool D3DRenderer::Render()
 	}
 	else
 	{
+#ifdef USE_GROOVY
+		// Tee to the MiSTer here: framebufferSurface holds the finished frame,
+		// and everything below - the blit to the backbuffer, the ImGui overlay
+		// with Fightcade's player names/scores/ping/chat, and the swap in
+		// mainui_loop - is downstream. So the CRT gets the game alone, and gets
+		// it before any of that work is done.
+		//
+		// Safe to read here because SetRenderTarget(0, backbuffer) above has
+		// already unbound framebufferSurface; GetRenderTargetData on a surface
+		// that is still bound as the render target is not. Do not move this
+		// call above that line.
+		groovy::onFrameReady((int)width, (int)height);
+#endif
 		aspectRatio = getOutputFramebufferAspectRatio();
 		displayFramebuffer();
 		DrawOSD(false);
@@ -1253,6 +1269,71 @@ void D3DRenderer::DrawOSD(bool clear_screen)
 	gui_display_osd();
 	theDXContext.setOverlay(false);
 }
+
+#ifdef USE_GROOVY
+bool D3DRenderer::ReadFrame(u8 *dst, int width, int height)
+{
+	if (dst == nullptr || width <= 0 || height <= 0)
+		return false;
+	if (!framebufferSurface)
+		return false;
+	// The caller sized its buffer from pvrrc.framebufferWidth/Height; this->width
+	// and ->height are what resize() actually built the surface at. A mismatch
+	// means the two got out of step, and reading anyway would either tear or
+	// overrun - refuse and let the Groovy path report it.
+	if ((u32)width != this->width || (u32)height != this->height)
+		return false;
+
+	// D3DPOOL_SYSTEMMEM staging surface, cached across frames.
+	if (!groovyStagingSurface || groovyStagingWidth != (u32)width || groovyStagingHeight != (u32)height)
+	{
+		groovyStagingSurface.reset();
+		if (FAILED(device->CreateOffscreenPlainSurface(width, height, D3DFMT_A8R8G8B8,
+				D3DPOOL_SYSTEMMEM, &groovyStagingSurface.get(), nullptr)))
+		{
+			groovyStagingWidth = groovyStagingHeight = 0;
+			return false;
+		}
+		groovyStagingWidth = width;
+		groovyStagingHeight = height;
+	}
+
+	// Synchronous: this blocks until the GPU has finished the frame. That is
+	// the intent - it costs a pipeline flush but zero frames of latency.
+	// Unlike writeFramebufferToVRAM() we do not verify()/die on failure; a lost
+	// device or a driver hiccup must degrade to "no CRT output this frame",
+	// never take the emulator down mid-match.
+	if (FAILED(device->GetRenderTargetData(framebufferSurface, groovyStagingSurface)))
+		return false;
+
+	D3DLOCKED_RECT rect;
+	RECT lockRect { 0, 0, (long)width, (long)height };
+	if (FAILED(groovyStagingSurface->LockRect(&rect, &lockRect, D3DLOCK_READONLY)))
+		return false;
+
+	// A8R8G8B8 is B,G,R,A in memory - already the ReadFrame contract, no swizzle.
+	// Top-down, matching COORD_DIRECTX, so no flip either.
+	const size_t rowBytes = (size_t)width * 4;
+	if ((size_t)rect.Pitch == rowBytes)
+	{
+		memcpy(dst, rect.pBits, rowBytes * height);
+	}
+	else
+	{
+		const u8 *src = (const u8 *)rect.pBits;
+		u8 *out = dst;
+		for (int y = 0; y < height; y++)
+		{
+			memcpy(out, src, rowBytes);
+			src += rect.Pitch;
+			out += rowBytes;
+		}
+	}
+	groovyStagingSurface->UnlockRect();
+
+	return true;
+}
+#endif
 
 void D3DRenderer::writeFramebufferToVRAM()
 {

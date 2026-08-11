@@ -1156,3 +1156,342 @@ void GuiSettings::settings_body_video(ImVec2 normal_padding)
 		break;
 	}
 }
+
+#ifdef USE_GROOVY
+
+// Local widgets for the Groovy options.
+//
+// gui_util.h's OptionComboBox/OptionSlider/OptionRadioButton take
+// config::Option<int>, which is Option<int, PerGameOption=true>. Every Groovy
+// option is deliberately Option<int, false>, so they do not bind - and that is
+// not a naming detail worth "fixing" by flipping the flag:
+//
+//   Option::load() (core/cfg/option.h:122) takes the per-game branch when
+//   PerGameOption is true AND a per-game config exists, and that branch never
+//   checks cfgIsVirtual(). Since cfgIsVirtual() is what makes a command-line
+//   -config value stick, a per-game option set from the command line is
+//   silently ignored for any game that has per-game settings. Fightcade drives
+//   this whole feature through -config, so these must stay non-per-game.
+//
+// Hence these three small helpers. They mirror the gui_util versions exactly.
+static void groovyComboBox(const char *name, config::Option<int, false>& option,
+		const char *values[], int count, const char *help = nullptr)
+{
+	int index;
+	for (index = 0; index < count; index++)
+		if (option == index)
+			break;
+	if (index == count)
+		index = 0;
+
+	DisabledScope scope(option.isReadOnly());
+	if (ImGui::BeginCombo(name, values[index], ImGuiComboFlags_None))
+	{
+		for (int i = 0; i < count; i++)
+		{
+			const bool selected = index == i;
+			if (ImGui::Selectable(values[i], selected) && !option.isReadOnly())
+				option.set(i);
+			if (selected)
+				ImGui::SetItemDefaultFocus();
+		}
+		ImGui::EndCombo();
+	}
+	if (help != nullptr)
+	{
+		ImGui::SameLine();
+		ShowHelpMarker(help);
+	}
+}
+
+static void groovySlider(const char *name, config::Option<int, false>& option,
+		int min, int max, const char *fmt, const char *help = nullptr)
+{
+	DisabledScope scope(option.isReadOnly());
+	int value = option;
+	if (ImGui::SliderInt(name, &value, min, max, fmt) && !option.isReadOnly())
+		option.set(value);
+	if (help != nullptr)
+	{
+		ImGui::SameLine();
+		ShowHelpMarker(help);
+	}
+}
+
+// There is no OptionString text-input helper in gui_util, so string options are
+// raw InputText + set(), the same way the Dojo UI already does it elsewhere.
+static void groovyTextInput(const char *name, config::Option<std::string, false>& option,
+		const char *help = nullptr)
+{
+	DisabledScope scope(option.isReadOnly());
+	char buf[256];
+	strncpy(buf, option.get().c_str(), sizeof(buf) - 1);
+	buf[sizeof(buf) - 1] = '\0';
+	if (ImGui::InputText(name, buf, sizeof(buf), ImGuiInputTextFlags_CharsNoBlank) && !option.isReadOnly())
+		option.set(std::string(buf));
+	if (help != nullptr)
+	{
+		ImGui::SameLine();
+		ShowHelpMarker(help);
+	}
+}
+
+void GuiSettings::settings_body_mister(ImVec2 normal_padding)
+{
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, normal_padding);
+
+	OptionCheckbox("Enable Groovy MiSTer NLC", config::GroovyEnable,
+			"Stream frames to a Groovy MiSTer (DE10-Nano) over the network for display on a CRT. "
+			"The PC window keeps running as normal.");
+
+	if (!config::GroovyEnable)
+	{
+		ImGui::Spacing();
+		ImGui::TextWrapped("Requires a MiSTer running the Groovy core, reachable over the network. "
+				"A direct GbE cable with static IPs on both ends is strongly recommended - no switch, no Wi-Fi.");
+		ImGui::PopStyleVar();
+		return;
+	}
+
+	ImGui::Spacing();
+	header("Connection");
+	groovyTextInput("MiSTer IP", config::GroovyHost, "IP address of the MiSTer. Default 192.168.100.2.");
+	// Port is deliberately not exposed. It is fixed at 32100 by the Groovy core
+	// and we have no handling for it changing mid-session (it rides CMD_INIT, so
+	// a change needs a full reconnect). The config option still exists and is
+	// still honoured, so -config groovy:Port=N works if it is ever needed.
+
+	ImGui::Spacing();
+	header("Monitor");
+	{
+		// The allowlist is ours because switchres cannot be asked whether a
+		// preset name was valid - it stores and echoes back whatever it is
+		// given, keeps the previous ranges, and logs one line nobody reads.
+		int presetCount = 0;
+		const char * const *presets = groovy::monitorPresetList(presetCount);
+		const std::string& current = config::GroovyMonitorPreset.get();
+		DisabledScope scope(config::GroovyMonitorPreset.isReadOnly());
+		if (ImGui::BeginCombo("Monitor Preset", current.c_str(), ImGuiComboFlags_None))
+		{
+			for (int i = 0; i < presetCount; i++)
+			{
+				const bool selected = current == presets[i];
+				if (ImGui::Selectable(presets[i], selected))
+					config::GroovyMonitorPreset.set(std::string(presets[i]));
+				if (selected)
+					ImGui::SetItemDefaultFocus();
+			}
+			ImGui::EndCombo();
+		}
+	}
+	ImGui::SameLine();
+	ShowHelpMarker("CRT type. arcade_15 is a 15kHz arcade monitor; arcade_15_25_31 is tri-sync and "
+			"also gives real 480p on VGA-mode games. A 15kHz-only monitor cannot show 480p, so "
+			"480-line modes are sent as an interlaced signal instead.");
+	groovyTextInput("switchres.ini", config::GroovySwitchresIni,
+			"Optional switchres ini for a custom monitor. Leave blank for the preset above.");
+
+	ImGui::Spacing();
+	header("Stream");
+	{
+		static const char *codecs[] = { "Raw", "LZ4", "LZ4 delta", "LZ4HC", "LZ4HC delta",
+				"LZ4 adaptive", "LZ4 adaptive delta", "NLC" };
+		groovyComboBox("Codec", config::GroovyCodec, codecs, 8,
+				"NLC is the default and gives the best quality per byte. LZ4 is the fallback for "
+				"an older core that cannot do NLC, and is cheaper to encode. Raw cannot sustain "
+				"480p - it is over the bandwidth ceiling.");
+	}
+	if (config::GroovyCodec == 7)
+	{
+		// Only two distinct packs, but the wire values are 0/1 = TILED and
+		// 2 = RICE, so this cannot be a straight index-to-value combo like the
+		// others - hence the explicit mapping rather than groovyComboBox().
+		{
+			static const char *packs[] = { "Tiled", "Rice" };
+			const int index = config::GroovyNlcPack >= 2 ? 1 : 0;
+			DisabledScope scope(config::GroovyNlcPack.isReadOnly());
+			if (ImGui::BeginCombo("NLC Pack", packs[index], ImGuiComboFlags_None))
+			{
+				for (int i = 0; i < 2; i++)
+					if (ImGui::Selectable(packs[i], index == i))
+						config::GroovyNlcPack.set(i == 1 ? 2 : 1);
+				ImGui::EndCombo();
+			}
+		}
+		ImGui::SameLine();
+		ShowHelpMarker("Rice needs a rice-capable core. An older core misparses Rice as Tiled and "
+				"shows garbage with no error, so drop to Tiled if the picture is scrambled.");
+		groovySlider("NLC Level", config::GroovyNearLevel, 0, 3, "%d",
+				"0 is lossless but can peak over the bandwidth ceiling. 1 is the default and is "
+				"visually indistinguishable from lossless on a CRT.");
+	}
+	{
+		// RGB565 is not offered with NLC: the combination is broken upstream
+		// (verified with no flycast code in the path - the picture is almost
+		// entirely wrong). Coerce rather than just hiding it, so a config that
+		// already has 565 saved does not sit in an unreachable state.
+		const bool nlc = config::GroovyCodec == 7;
+		if (nlc && config::GroovyRgbMode == 2)
+			config::GroovyRgbMode.set(0);
+
+		static const char *rgb[] = { "RGB888", "RGBA888", "RGB565" };
+		groovyComboBox("Colour Depth", config::GroovyRgbMode, rgb, nlc ? 2 : 3,
+				nlc ? "RGB565 is unavailable with NLC - the combination is broken in the codec. "
+						"Switch to LZ4 if you need it for bandwidth."
+					: "RGB565 halves bandwidth at the cost of banding.");
+	}
+	{
+		static const char *mtus[] = { "1500", "3800 (jumbo frames)" };
+		int index = config::GroovyMtu >= 3800 ? 1 : 0;
+		DisabledScope scope(config::GroovyMtu.isReadOnly());
+		if (ImGui::BeginCombo("MTU", mtus[index], ImGuiComboFlags_None))
+		{
+			for (int i = 0; i < 2; i++)
+				if (ImGui::Selectable(mtus[i], index == i))
+					config::GroovyMtu.set(i == 1 ? 3800 : 1500);
+			ImGui::EndCombo();
+		}
+	}
+	ImGui::SameLine();
+	ShowHelpMarker("3800 requires 'Server -> Jumbo frames = On' in the Groovy core's OSD.");
+
+	ImGui::Spacing();
+	header("Audio");
+	{
+		static const char *audio[] = { "Off", "PC and MiSTer", "MiSTer only" };
+		groovyComboBox("Audio Output", config::GroovyAudioMode, audio, 3,
+				"'MiSTer only' is the default - the cabinet's speakers are the point, and the same "
+				"audio from the PC half a frame out of step is worse than one source. Pick "
+				"'PC and MiSTer' to keep both. Requires 'Audio = On' in the Groovy core's OSD; if "
+				"that is off the core drops audio, the status below says so, and the PC keeps its "
+				"sound. Changing this reconnects, because the audio rate is fixed when the session "
+				"opens.");
+	}
+
+	ImGui::Spacing();
+	header("Latency");
+	groovySlider("Frame Delay Line", config::GroovyVCountSync, 0, 525, "%d",
+			"Raster line each frame syncs to. 0 is automatic. Note that automatic only works when "
+			"the CRT owns the frame clock, which is offline play - during netplay flycast's own "
+			"clock stays in charge and line 1 is used instead.");
+	groovySlider("Frame Delay Margin", config::GroovyFdMarginNs, 0, 3000000, "%d ns",
+			"Safety headroom for the automatic frame delay calculation.");
+
+	ImGui::Spacing();
+	header("MiSTer Inputs");
+	OptionCheckbox("Use MiSTer Controllers", config::GroovyUseInputs,
+			"Use the pads plugged into the MiSTer instead of (or alongside) controllers on this PC, "
+			"so a cabinet needs no host-side controller. Note this adds a network hop compared with "
+			"a stick plugged into the PC, so it is a convenience rather than a latency win. "
+			"Requires 'Server > Send inputs > Joysticks' in the Groovy core's OSD.");
+	if (config::GroovyUseInputs)
+	{
+		// Input port not exposed, same reasoning as the video port above: fixed
+		// at 32101 by the core, bound before CmdInit, and still settable via
+		// -config groovy:InputPort=N.
+		OptionCheckbox("Rumble", config::GroovyRumble,
+				"Requires a core reporting version 2 or newer. The MiSTer gates this further: "
+				"MiSTer.ini RUMBLE, then System > Controllers > <player> > Rumble. If nothing "
+				"vibrates, check those in that order.");
+	}
+
+	ImGui::Spacing();
+	header("Safety and Diagnostics");
+	OptionCheckbox("CRT Safety Limit", config::GroovyCrtSafetyCap,
+			"Refuse modelines outside a conservative envelope for an arcade CRT. Only turn this "
+			"off if you know your monitor can take it - switchres will happily compute a mode "
+			"that your CRT cannot.");
+	OptionCheckbox("Auto Reconnect", config::GroovyAutoReconnect,
+			"Reconnect automatically if the MiSTer stops acknowledging frames.");
+	{
+		static const char *levels[] = { "Errors only", "Errors and telemetry", "Full trace" };
+		groovyComboBox("Log Level", config::GroovyLogLevel, levels, 3);
+	}
+	OptionCheckbox("Write Log File", config::GroovyLogToFile,
+			"Write a Groovy log next to your data files. Independent of flycast's own logging, "
+			"which is off by default and has nowhere to go in a windowed build.");
+
+	ImGui::Spacing();
+	header("Status");
+	{
+		groovy::OutputStatus status;
+		groovy::getStatus(status);
+
+		ImGui::Text("State: %s", status.state.c_str());
+		if (status.connected)
+		{
+			if (status.haveModeline)
+			{
+				const groovy::Modeline& m = status.modeline;
+				ImGui::Text("Source: %dx%d @%.3f Hz%s", status.srcWidth, status.srcHeight,
+						status.srcRefresh, status.srcInterlaced ? " interlaced" : "");
+				ImGui::Text("Modeline: %dx%d %.4f MHz, %s", m.hActive, m.vActive, m.pclock,
+						m.interlace == groovy::INTERLACE_PROGRESSIVE ? "progressive"
+								: "progressive framebuffer over interlaced");
+			}
+			ImGui::Text("Frames sent: %u   Last blit: %u bytes", status.framesSent, status.lastBlitBytes);
+			if (status.reconnects > 0)
+				ImGui::Text("Reconnects: %u", status.reconnects);
+
+			// Straight from the FPGA. vramSynced going low is the red-screen
+			// condition and is the single most useful thing to surface.
+			if (!status.vramSynced)
+				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f),
+						"MiSTer lost sync with the stream (check bandwidth - try LZ4 or RGB565)");
+			if (status.frameskip)
+				ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "MiSTer is skipping frames");
+
+			ImGui::Text("Frame cost: %.2f ms pack+blit, %.2f ms sync overhead (worst %.2f ms over 5s)",
+					status.packBlitMs, status.syncOverheadMs, status.worstFrameMs);
+		}
+	}
+
+	ImGui::Spacing();
+	if (ImGui::Button("Run Pixel Self-Test"))
+	{
+		const int rc = groovy::selfTest();
+		if (rc == 0)
+			gui_display_notification("MiSTer: pixel self-test passed", 3000);
+		else
+			gui_display_notification(("MiSTer: pixel self-test FAILED - " +
+					std::string(groovy::selfTestResultName(rc))).c_str(), 6000);
+	}
+	ImGui::SameLine();
+	ShowHelpMarker("Checks the wire pixel packing against known red/green/blue pixels. Catches a "
+			"red/blue channel swap, which is the most common first-run problem.");
+
+	ImGui::SameLine();
+	if (ImGui::Button("Dump 4 Frames"))
+		groovy::requestFrameDump(4, "");
+	ImGui::SameLine();
+	ShowHelpMarker("Writes the next 4 captured frames next to your data files as .ppm and .raw, "
+			"so you can confirm the image is the right way up and the right way round without a "
+			"MiSTer attached.");
+
+	ImGui::Spacing();
+	header("Log");
+	{
+		// The ring buffer has always been populated; it was simply never shown,
+		// which is half of why the first hardware test produced no diagnostics.
+		if (config::GroovyLogToFile)
+			ImGui::TextWrapped("File: %s", groovy::logFileLocation().c_str());
+
+		const std::deque<std::string>& lines = groovy::logRing();
+		ImGui::BeginChild("groovy_log", ScaledVec2(0, 160), true,
+				ImGuiWindowFlags_HorizontalScrollbar);
+		if (lines.empty())
+			ImGui::TextDisabled("(nothing logged yet)");
+		else
+			for (const std::string& line : lines)
+				ImGui::TextUnformatted(line.c_str());
+		// Follow the tail only while already at the bottom, so scrolling back to
+		// read something is not yanked away by the next line.
+		if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+			ImGui::SetScrollHereY(1.0f);
+		ImGui::EndChild();
+	}
+
+	ImGui::PopStyleVar();
+}
+
+#endif // USE_GROOVY

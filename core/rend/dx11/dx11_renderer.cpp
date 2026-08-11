@@ -23,6 +23,9 @@
 #include "rend/gui.h"
 #include "rend/tileclip.h"
 #include "rend/sorter.h"
+#ifdef USE_GROOVY
+#include "rend/groovy/groovy_capture.h"
+#endif
 
 const D3D11_INPUT_ELEMENT_DESC MainLayout[]
 {
@@ -454,6 +457,18 @@ bool DX11Renderer::Render()
 		aspectRatio = getOutputFramebufferAspectRatio();
 #ifndef LIBRETRO
 		deviceContext->OMSetRenderTargets(1, &theDX11Context.getRenderTarget().get(), nullptr);
+#ifdef USE_GROOVY
+		// Tee to the MiSTer here, in the one window where fbTex is bound to
+		// nothing: the line above has just swapped the render target to the
+		// backbuffer, and displayFramebuffer() below is what binds fbTex as a
+		// shader resource. Copying from a currently-bound render target is a
+		// D3D11 resource hazard, so this must not move earlier.
+		//
+		// Still ahead of everything that matters for latency: the blit to the
+		// swapchain, the ImGui overlay (Fightcade's player names, scores, ping
+		// and chat) and the swap in mainui_loop are all below.
+		groovy::onFrameReady((int)width, (int)height);
+#endif
 		displayFramebuffer();
 		DrawOSD(false);
 		theDX11Context.setFrameRendered();
@@ -1169,6 +1184,71 @@ void DX11Renderer::DrawOSD(bool clear_screen)
 	theDX11Context.setOverlay(false);
 #endif
 }
+
+#ifdef USE_GROOVY
+bool DX11Renderer::ReadFrame(u8 *dst, int width, int height)
+{
+	if (dst == nullptr || width <= 0 || height <= 0)
+		return false;
+	if (!fbTex)
+		return false;
+	// resize() built fbTex at this->width/height; a mismatch means the caller's
+	// geometry and ours diverged, and reading anyway would tear or overrun.
+	if ((u32)width != this->width || (u32)height != this->height)
+		return false;
+
+	if (!groovyStagingTex || groovyStagingWidth != (u32)width || groovyStagingHeight != (u32)height)
+	{
+		groovyStagingTex.reset();
+		D3D11_TEXTURE2D_DESC desc{};
+		fbTex->GetDesc(&desc);
+		desc.Usage = D3D11_USAGE_STAGING;
+		desc.BindFlags = 0;
+		desc.MiscFlags = 0;
+		desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		if (FAILED(device->CreateTexture2D(&desc, nullptr, &groovyStagingTex.get())))
+		{
+			groovyStagingWidth = groovyStagingHeight = 0;
+			return false;
+		}
+		groovyStagingWidth = width;
+		groovyStagingHeight = height;
+	}
+
+	deviceContext->CopyResource(groovyStagingTex, fbTex);
+
+	// Synchronous by design: Map without D3D11_MAP_FLAG_DO_NOT_WAIT blocks
+	// until the copy has retired. That costs a pipeline flush and zero frames of
+	// latency, which is the trade we want - flycast has idle slack in every
+	// frame that absorbs it.
+	D3D11_MAPPED_SUBRESOURCE mapped;
+	if (FAILED(deviceContext->Map(groovyStagingTex, 0, D3D11_MAP_READ, 0, &mapped)))
+		return false;
+
+	// B8G8R8A8_UNORM is already the ReadFrame contract's byte order, and DX11
+	// render targets are top-down, so this is a straight row copy.
+	const size_t rowBytes = (size_t)width * 4;
+	if (mapped.RowPitch == rowBytes)
+	{
+		memcpy(dst, mapped.pData, rowBytes * height);
+	}
+	else
+	{
+		const u8 *src = (const u8 *)mapped.pData;
+		u8 *out = dst;
+		for (int y = 0; y < height; y++)
+		{
+			memcpy(out, src, rowBytes);
+			src += mapped.RowPitch;
+			out += rowBytes;
+		}
+	}
+	deviceContext->Unmap(groovyStagingTex, 0);
+
+	return true;
+}
+#endif
 
 void DX11Renderer::writeFramebufferToVRAM()
 {

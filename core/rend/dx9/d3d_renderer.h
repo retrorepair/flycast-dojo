@@ -112,6 +112,9 @@ struct D3DRenderer : public Renderer
 		return true;
 	}
 	void DrawOSD(bool clear_screen) override;
+#ifdef USE_GROOVY
+	bool ReadFrame(u8 *dst, int width, int height) override;
+#endif
 	BaseTextureCacheData *GetTexture(TSP tsp, TCW tcw) override;
 	void preReset();
 	void postReset();
@@ -163,6 +166,15 @@ private:
 	ComPtr<IDirect3DSurface9> depthSurface;
 	ComPtr<IDirect3DTexture9> fbScaledTexture;
 	ComPtr<IDirect3DSurface9> fbScaledSurface;
+#ifdef USE_GROOVY
+	// Cached SYSTEMMEM staging surface for ReadFrame. Held across frames
+	// because this runs every frame at 60Hz, unlike writeFramebufferToVRAM
+	// which allocates one per call - fine for an accuracy path, not for a hot
+	// one. Recreated only when the size changes.
+	ComPtr<IDirect3DSurface9> groovyStagingSurface;
+	u32 groovyStagingWidth = 0;
+	u32 groovyStagingHeight = 0;
+#endif
 
 	u32 width = 0;
 	u32 height = 0;
