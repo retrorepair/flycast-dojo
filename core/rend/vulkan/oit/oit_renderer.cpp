@@ -23,6 +23,10 @@
 #include "oit_drawer.h"
 #include "oit_shaders.h"
 #include "oit_buffer.h"
+#ifdef USE_GROOVY
+#include "../vk_groovy_readback.h"
+#include "rend/groovy/groovy_capture.h"
+#endif
 
 class OITVulkanRenderer final : public BaseVulkanRenderer
 {
@@ -89,6 +93,13 @@ public:
 
 			drawer->EndFrame();
 
+#ifdef USE_GROOVY
+			// Same reasoning as the non-OIT path: EndFrame is what submits, so
+			// the final colour attachment only holds the frame after it.
+			if (!pvrrc.isRTT && !config::EmulateFramebuffer)
+				groovy::onFrameReady((int)viewport.width, (int)viewport.height);
+#endif
+
 			return !pvrrc.isRTT;
 		} catch (const vk::SystemError& e) {
 			// Sometimes happens when resizing the window
@@ -105,6 +116,15 @@ public:
 		else
 			return screenDrawer.PresentFrame();
 	}
+
+#ifdef USE_GROOVY
+	bool ReadFrame(u8 *dst, int width, int height) override
+	{
+		if ((u32)width != viewport.width || (u32)height != viewport.height)
+			return false;
+		return groovyReadback.read(screenDrawer.GetLastFrameImage(), width, height, dst);
+	}
+#endif
 
 protected:
 	void resize(int w, int h) override
@@ -123,6 +143,9 @@ private:
 	OITScreenDrawer screenDrawer;
 	OITTextureDrawer textureDrawer;
 	bool emulateFramebuffer = false;
+#ifdef USE_GROOVY
+	GroovyVkReadback groovyReadback;
+#endif
 };
 
 Renderer* rend_OITVulkan()

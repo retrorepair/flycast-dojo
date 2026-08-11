@@ -624,4 +624,33 @@ constexpr bool UseRawInput = false;
 extern Option<std::string, false> LuaFileName;
 #endif
 
+#ifdef USE_GROOVY
+// Groovy MiSTer CRT output. Section [groovy]; Fightcade drives these through
+// the command line as -config groovy:Enable=yes etc, which is the only external
+// control surface flycast has (see core/cfg/cl.cpp).
+//
+// PerGameOption is false throughout: this describes the user's physical CRT and
+// network, not anything about a particular game.
+extern Option<bool, false> GroovyEnable;
+extern Option<std::string, false> GroovyHost;
+extern Option<int, false> GroovyPort;
+extern Option<std::string, false> GroovyMonitorPreset;
+extern Option<std::string, false> GroovySwitchresIni;
+extern Option<int, false> GroovyCodec;        // 0 raw, 1 LZ4, 7 NLC (CmdInit lz4Frames)
+extern Option<int, false> GroovyNlcPack;      // 0/1 TILED, 2 Rice - needs a rice-capable core
+extern Option<int, false> GroovyNearLevel;    // NLC only: 0 lossless, 1-3 near-lossless
+extern Option<int, false> GroovyRgbMode;      // 0 RGB888, 1 RGBA888, 2 RGB565
+extern Option<int, false> GroovyMtu;          // 1500, or 3800 with OSD jumbo frames
+extern Option<int, false> GroovyVCountSync;   // 0 = automatic frame delay
+extern Option<int, false> GroovyFdMarginNs;
+extern Option<bool, false> GroovyCrtSafetyCap;
+extern Option<bool, false> GroovyAutoReconnect;
+extern Option<int, false> GroovyLogLevel;     // 0 errors, 1 +telemetry, 2 trace
+extern Option<bool, false> GroovyLogToFile;   // write <data>/groovy.log
+extern Option<int, false> GroovyAudioMode;    // 0 off, 1 PC + MiSTer, 2 MiSTer only
+extern Option<bool, false> GroovyUseInputs;   // consume the MiSTer's own pads
+extern Option<int, false> GroovyInputPort;
+extern Option<bool, false> GroovyRumble;
+#endif
+
 } // namespace config

@@ -60,6 +60,36 @@ void CalculateSync()
 	sh4_sched_request(vblank_schid, Line_Cycles);
 }
 
+double spg_getRefreshRate()
+{
+	// Frame_Cycles is what spg_line_sched actually counts down to reach
+	// scanline 0, where rend_vblank() fires. Deriving the rate from it rather
+	// than from the nominal standard means a consumer pacing to this value
+	// stays locked to the emulator even though Line_Cycles is truncated to an
+	// integer (NTSC lands on ~59.945Hz, not exactly 59.94).
+	if (Frame_Cycles == 0)
+		return 0.0;
+	return (double)SH4_MAIN_CLOCK / (double)Frame_Cycles;
+}
+
+DCVideoMode spg_getVideoMode()
+{
+	DCVideoMode mode;
+	mode.refreshRate = spg_getRefreshRate();
+	mode.interlaced = SPG_CONTROL.interlace != 0;
+
+	// Same classification the debug FPS line uses below: NTSC and PAL are
+	// mutually exclusive bits, and VGA is "neither".
+	if (SPG_CONTROL.NTSC == 0 && SPG_CONTROL.PAL == 1)
+		mode.standard = DCVideoStandard::PAL;
+	else if (SPG_CONTROL.NTSC == 1 && SPG_CONTROL.PAL == 0)
+		mode.standard = DCVideoStandard::NTSC;
+	else
+		mode.standard = DCVideoStandard::VGA;
+
+	return mode;
+}
+
 static int getNextSpgInterrupt()
 {
 	if (SPG_HBLANK_INT.hblank_int_mode == 2)

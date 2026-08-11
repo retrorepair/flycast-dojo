@@ -226,6 +226,12 @@
 #define USE_GGPO
 #endif
 
+// Groovy MiSTer CRT output. HAVE_GROOVY_MISTER comes from CMake, which forces it
+// off for Android/iOS/UWP/libretro (see USE_GROOVY_MISTER in CMakeLists.txt).
+#if defined(HAVE_GROOVY_MISTER) && !defined(LIBRETRO)
+#define USE_GROOVY
+#endif
+
 // TARGET PLATFORM
 
 #define RAM_SIZE_MAX (32*1024*1024)

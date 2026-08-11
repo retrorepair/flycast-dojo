@@ -27,6 +27,9 @@
 #ifdef LIBRETRO
 #include "rend/gles/postprocess.h"
 #endif
+#ifdef USE_GROOVY
+#include "rend/groovy/groovy_capture.h"
+#endif
 
 //Fragment and vertex shaders code
 
@@ -987,6 +990,12 @@ bool OpenGL4Renderer::renderFrame(int width, int height)
 		writeFramebufferToVRAM();
 #ifndef LIBRETRO
 	else {
+#ifdef USE_GROOVY
+		// Same tee point as the GL2 path. ReadFrame itself is inherited from
+		// OpenGLRenderer - the OIT renderer still resolves into gl.ofbo, so
+		// there is nothing backend-specific to reimplement here.
+		groovy::onFrameReady(width, height);
+#endif
 		gl.ofbo.aspectRatio = getOutputFramebufferAspectRatio();
 		renderLastFrame();
 	}

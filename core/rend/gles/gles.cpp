@@ -13,6 +13,9 @@
 #include "emulator.h"
 #include "naomi2.h"
 #include "rend/gles/postprocess.h"
+#ifdef USE_GROOVY
+#include "rend/groovy/groovy_capture.h"
+#endif
 
 #ifdef TEST_AUTOMATION
 #include "cfg/cfg.h"
@@ -1399,6 +1402,14 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 		writeFramebufferToVRAM();
 #ifndef LIBRETRO
 	else {
+#ifdef USE_GROOVY
+		// Tee to the MiSTer before renderLastFrame() blits gl.ofbo to the
+		// window and before DrawOSD() puts the ImGui overlay (including
+		// Fightcade's player names, scores, ping and chat) on top of it. The
+		// overlay only ever lands in the default framebuffer, never in
+		// gl.ofbo, so what we read here is the game alone.
+		groovy::onFrameReady(width, height);
+#endif
 		gl.ofbo.aspectRatio = getOutputFramebufferAspectRatio();
 		renderLastFrame();
 	}

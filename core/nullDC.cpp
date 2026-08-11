@@ -17,6 +17,9 @@
 
 #include "dojo/DojoSession.hpp"
 #include "dojo/deps/filesystem.hpp"
+#ifdef USE_GROOVY
+#include "rend/groovy/groovy_output.h"
+#endif
 
 int flycast_init(int argc, char* argv[])
 {
@@ -62,6 +65,12 @@ int flycast_init(int argc, char* argv[])
 	if(config::ProfilerEnabled)
 		LogManager::GetInstance()->SetEnable(LogTypes::PROFILER, true);
 
+#ifdef USE_GROOVY
+	// Only installs the client's log sink; the session itself opens lazily on
+	// the first rendered frame.
+	groovy::init();
+#endif
+
 	return 0;
 }
 
@@ -89,6 +98,13 @@ void SaveSettings()
 void flycast_term()
 {
 	gui_cancel_load();
+#ifdef USE_GROOVY
+	// Before the renderer goes away. Sends CMD_CLOSE so the MiSTer returns to
+	// its connection-search screen rather than freezing on our last frame.
+	// Note USE_BREAKPAD is live on the shipped Windows build, so a hard crash
+	// bypasses this entirely - the core's idle timeout is the backstop there.
+	groovy::term();
+#endif
 	if (!settings.network.online)
 		lua::term();
 	emu.term();

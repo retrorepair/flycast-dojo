@@ -26,6 +26,10 @@
 #include "emulator.h"
 #include "imgui_driver.h"
 #include "profiler/fc_profiler.h"
+#ifdef USE_GROOVY
+#include "rend/groovy/groovy_input.h"
+#include "rend/groovy/groovy_output.h"
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -144,6 +148,12 @@ void mainui_loop()
 	timeBeginPeriod(1);
 #endif
 
+	// Started unconditionally, even when Groovy is enabled and will end up
+	// owning the clock. Deliberate: the bypass below is at the CONSUMER, not
+	// here, so if the MiSTer session drops or never connects, pacingActive()
+	// goes false and this clock silently takes over again. Skipping the thread
+	// instead would leave the loop spinning forever on display_refresh in
+	// exactly that case.
 	if (config::FixedFrequency != 0)
 		start_display_refresh_thread();
 
@@ -174,7 +184,17 @@ void mainui_loop()
 			else if (config::FixedFrequency == 5)
 				period = 33333; // 1/30
 
+			bool groovyOwnsClock = false;
+#ifdef USE_GROOVY
+			// When the CRT raster is the clock, skip flycast's software one -
+			// two pacers targeting ~16.7ms beat against each other and produce
+			// periodic dropped frames. groovy::pacingActive() is false under
+			// GGPO netplay, so online this spin stays in charge exactly as
+			// before and WaitSync degenerates to a cheap ACK drain.
+			groovyOwnsClock = groovy::pacingActive();
+#endif
 			if (config::FixedFrequency != 0 &&
+				!groovyOwnsClock &&
 				!gui_is_open() &&
 				!settings.input.fastForwardMode)
 			{
@@ -190,6 +210,28 @@ void mainui_loop()
 			forceReinit = true;
 		else
 			imguiDriver->present();
+
+#ifdef USE_GROOVY
+		// Unconditional, every iteration - including ones where the ImGui menu
+		// was open and nothing was emulated or blitted.
+		//
+		// waitSync() is the pacing wait when Groovy owns the clock, and on
+		// Windows it is also the ONLY drain for the RIO send-completion queue;
+		// letting that fill makes sends fail silently in a way indistinguishable
+		// from a dead core. Placing it after the FixedFrequency spin above is
+		// what makes one call site serve both regimes: online the frame period
+		// is already spent, so it falls straight through to the drain.
+		//
+		// keepAlive() covers the case flycast is alive but not blitting, which
+		// would otherwise hit the core's 5s idle timeout and free the CRT.
+		groovy::waitSync();
+		groovy::keepAlive();
+		// Registration only - no input is read here. Done from the main loop
+		// rather than the emulation path because it must happen with no game
+		// running, so the pads show up in Settings > Controls for mapping
+		// before the MiSTer is ever connected.
+		groovy::updateInputDevices();
+#endif
 
 		if (config::RendererType != currentRenderer || forceReinit)
 		{

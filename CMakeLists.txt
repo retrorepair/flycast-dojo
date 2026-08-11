@@ -51,12 +51,36 @@ option(LIBRETRO "Build libretro core" OFF)
 option(USE_OPENGL "Use OpenGL API" ON)
 option(USE_VIDEOCORE "RPI: use the legacy Broadcom GLES libraries" OFF)
 option(APPLE_BREAKPAD "macOS: Build breakpad client and dump symbols" OFF)
+# Crash reporting. ON everywhere it was previously unconditional, so this changes
+# nothing by default - it exists so a build can opt out.
+#
+# Needed because core/deps/breakpad's Windows branch runs a bare `mingw32-make`
+# (i.e. `make all`) instead of passing --disable-processor --disable-tools and
+# building just libbreakpad_client.a, the way its own non-Windows branch does.
+# That drags in a Linux symbol-upload tool (needs curl) and a standalone
+# stackwalker (needs an underscore-less `stat64i32`, which only exists in
+# mingw-w64 runtime v12+), neither of which flycast links. Against an older
+# pinned runtime both fail to build. The proper fix is upstream in
+# flyinghead/mingw-breakpad; see docs/UPSTREAM_REPORT_mingw_breakpad_build_all.md
+option(USE_BREAKPAD "Build with breakpad crash reporting" ON)
+# OFF preserves existing behaviour on every platform: Android/Apple already use
+# the bundled asio, everyone else takes it from the system as before.
+option(USE_BUNDLED_ASIO "Use the vendored asio instead of a system one" OFF)
 option(ENABLE_GDB_SERVER "Build with GDB debugging support" OFF)
 option(ENABLE_DC_PROFILER "Build with support for target machine (SH4) profiler" OFF)
 option(ENABLE_FC_PROFILER "Build with support for host app (Flycast) profiler" OFF)
+option(USE_GROOVY_MISTER "Build with Groovy MiSTer CRT output support" ON)
 
 if(IOS AND NOT LIBRETRO)
 	set(USE_VULKAN OFF CACHE BOOL "Force vulkan off" FORCE)
+endif()
+
+# Groovy MiSTer output is a desktop feature: it needs a host UDP stack, a full
+# renderer backend to read frames back from, and a settings UI. The mobile and
+# libretro targets have none of that shape, and libretro in particular presents
+# through the frontend rather than through Renderer::Present().
+if(ANDROID OR IOS OR WINDOWS_STORE OR LIBRETRO)
+	set(USE_GROOVY_MISTER OFF CACHE BOOL "Force Groovy MiSTer off" FORCE)
 endif()
 
 include(GNUInstallDirs)
@@ -218,7 +242,13 @@ if(IOS)
 endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE core core/deps core/deps/stb core/khronos core/deps/json core/dojo)
-if(ANDROID OR APPLE)
+# asio is header-only and vendored at core/dojo/deps/asio-1.22.0. Android and
+# Apple have always used the bundled copy; every other platform expects it from
+# the system (CI installs mingw-w64-x86_64-asio / libasio-dev / brew asio).
+# USE_BUNDLED_ASIO lets a self-contained build use the vendored one too - which
+# is also the version this code was written against, whereas a system asio can
+# be many releases newer.
+if(ANDROID OR APPLE OR USE_BUNDLED_ASIO)
 	target_include_directories(${PROJECT_NAME} PRIVATE core/dojo/deps/asio-1.22.0/include)
 endif()
 if(NOT "${SENTRY_UPLOAD_URL}" STREQUAL "")
@@ -234,7 +264,7 @@ if(NINTENDO_SWITCH)
 endif()
 
 if(NOT LIBRETRO)
-	if((WIN32 AND NOT MSVC) OR (UNIX AND NOT APPLE AND NOT CMAKE_SYSTEM_NAME MATCHES "(FreeBSD|OpenBSD|NetBSD)"))
+	if(USE_BREAKPAD AND ((WIN32 AND NOT MSVC) OR (UNIX AND NOT APPLE AND NOT CMAKE_SYSTEM_NAME MATCHES "(FreeBSD|OpenBSD|NetBSD)")))
 		add_subdirectory(core/deps/breakpad)
 		if(WIN32)
 			target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--build-id")
@@ -350,6 +380,17 @@ target_link_libraries(${PROJECT_NAME} PRIVATE xxHash::xxhash)
 option(BUILD_SHARED_LIBS "Build shared library" OFF)
 add_subdirectory(core/deps/glm)
 target_link_libraries(${PROJECT_NAME} PRIVATE glm::glm)
+
+if(USE_GROOVY_MISTER)
+	# Both vendored verbatim from upstream - prefer sending fixes upstream over
+	# patching them here, so a re-sync stays a plain file copy.
+	# switchres computes CRT modelines (calc-only: it never switches the host
+	# display); groovymister streams the frames to the DE10-Nano over UDP.
+	add_subdirectory(core/deps/switchres)
+	add_subdirectory(core/deps/groovymister)
+	target_link_libraries(${PROJECT_NAME} PRIVATE switchres groovymister)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE HAVE_GROOVY_MISTER)
+endif()
 
 if(USE_VULKAN)
 	option(BUILD_EXTERNAL "Build external dependencies in /External" OFF)
@@ -1201,6 +1242,52 @@ if(NOT LIBRETRO)
 			core/rend/boxart/http_client.h
 			core/rend/boxart/scraper.cpp
 			core/rend/boxart/scraper.h)
+endif()
+
+if(USE_GROOVY_MISTER)
+	target_sources(${PROJECT_NAME} PRIVATE
+			core/rend/groovy/groovy_capture.cpp
+			core/rend/groovy/groovy_capture.h
+			core/rend/groovy/groovy_input.cpp
+			core/rend/groovy/groovy_input.h
+			core/rend/groovy/groovy_log.cpp
+			core/rend/groovy/groovy_log.h
+			core/rend/groovy/groovy_modeline.h
+			core/rend/groovy/groovy_output.cpp
+			core/rend/groovy/groovy_output.h
+			core/rend/groovy/groovy_pixels.cpp
+			core/rend/groovy/groovy_pixels.h
+			core/rend/groovy/groovy_switchres.cpp
+			core/rend/groovy/groovy_switchres.h)
+	if(USE_VULKAN)
+		target_sources(${PROJECT_NAME} PRIVATE
+				core/rend/vulkan/vk_groovy_readback.cpp
+				core/rend/vulkan/vk_groovy_readback.h)
+	endif()
+
+	if(ENABLE_CTEST)
+		# Standalone: links the vendored switchres and stubs the log sink, so it
+		# does not drag in the emulator. This is why groovy_modeline.h,
+		# groovy_pixels.* and groovy_switchres.cpp are kept free of flycast
+		# headers.
+		add_executable(groovy_modeline_test
+				core/rend/groovy/tests/groovy_modeline_test.cpp
+				core/rend/groovy/groovy_switchres.cpp
+				core/rend/groovy/groovy_pixels.cpp)
+		target_include_directories(groovy_modeline_test PRIVATE core/rend/groovy)
+		target_link_libraries(groovy_modeline_test PRIVATE switchres)
+		target_compile_features(groovy_modeline_test PRIVATE cxx_std_11)
+		if(MINGW)
+			# Statically link the C++ runtime, as the main target already does
+			# (see the -static-libgcc/-static-libstdc++ block below). Without
+			# this the test needs libstdc++-6.dll and libgcc_s_seh-1.dll from
+			# the compiler's bin directory, so running it outside a shell that
+			# has the toolchain on PATH fails to start - silently, with no
+			# output and no obvious cause.
+			target_link_libraries(groovy_modeline_test PRIVATE "-static-libgcc -static-libstdc++")
+		endif()
+		add_test(NAME groovy_modeline COMMAND groovy_modeline_test)
+	endif()
 endif()
 
 if(USE_VULKAN)

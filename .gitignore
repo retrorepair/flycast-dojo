@@ -1,4 +1,13 @@
 build/
+# Any build directory, e.g. build-mingw/ from
+# shell/windows/build-mingw-pinned.sh. Entirely generated: objects, binaries,
+# CMake's cache and FetchContent'd dependency sources. Nothing here belongs in
+# the repo - CMakeCache.txt in particular hardcodes absolute machine paths
+# (toolchain root, repo location), so it is actively misleading to share.
+build-*/
+
+# Build log, written by shell/windows/build-mingw-pinned.sh via `tee`.
+build.log
 
 # macOS
 .DS_Store
@@ -15,3 +24,8 @@ cmake-build-*/
 artifact
 default
 training
+
+# Working notes kept alongside the tree but deliberately untracked:
+# vendored-dependency provenance (upstream pins, applied patches, re-sync
+# steps) and draft upstream bug reports.
+/.notes/

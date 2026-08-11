@@ -41,6 +41,9 @@
 #include "network/naomi_network.h"
 #include "serialize.h"
 #include "hw/pvr/pvr.h"
+#ifdef USE_GROOVY
+#include "rend/groovy/groovy_capture.h"
+#endif
 #include "profiler/fc_profiler.h"
 #include <chrono>
 
@@ -925,6 +928,10 @@ void Emulator::start()
 	if (config::GGPOEnable && config::ThreadedRendering)
 		// Not supported with GGPO
 		config::EmulateFramebuffer.override(false);
+#ifdef USE_GROOVY
+	if (config::GroovyEnable)
+		groovy::applyConfigOverrides();
+#endif
 #if FEAT_SHREC != DYNAREC_NONE
 	if (config::DynarecEnabled)
 	{

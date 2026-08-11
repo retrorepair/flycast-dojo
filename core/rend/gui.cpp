@@ -2815,9 +2815,17 @@ static void gui_display_settings()
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ScaledVec2(16, 6));
 
 #ifdef _WIN32
+#ifdef USE_GROOVY
+	std::vector<std::string> sections = { "General", "Controls", "Video", "Audio", "MiSTer", "Netplay", "Replays", "Training", "Advanced", "About", "Update", "Credits" };
+#else
 	std::vector<std::string> sections = { "General", "Controls", "Video", "Audio", "Netplay", "Replays", "Training", "Advanced", "About", "Update", "Credits" };
+#endif
+#else
+#ifdef USE_GROOVY
+	std::vector<std::string> sections = { "General", "Controls", "Video", "Audio", "MiSTer", "Netplay", "Replays", "Training", "Advanced", "About", "Credits" };
 #else
 	std::vector<std::string> sections = { "General", "Controls", "Video", "Audio", "Netplay", "Replays", "Training", "Advanced", "About", "Credits" };
+#endif
 #endif
 
     static int selected = 0;
@@ -2906,6 +2914,11 @@ static void gui_display_settings()
 
 	if (sections[selected] == "Audio")
 		gui_settings.settings_body_audio(normal_padding);
+
+#ifdef USE_GROOVY
+	if (sections[selected] == "MiSTer")
+		gui_settings.settings_body_mister(normal_padding);
+#endif
 
 	if (sections[selected] == "Netplay")
 		dojo_gui.insert_netplay_tab(normal_padding);

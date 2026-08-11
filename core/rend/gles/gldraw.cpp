@@ -751,6 +751,83 @@ void writeFramebufferToVRAM()
 	glCheck();
 }
 
+#ifdef USE_GROOVY
+bool OpenGLRenderer::ReadFrame(u8 *dst, int width, int height)
+{
+	if (dst == nullptr || width <= 0 || height <= 0)
+		return false;
+	GlFramebuffer *framebuffer = gl.ofbo.framebuffer.get();
+	if (framebuffer == nullptr)
+		return false;
+	if (framebuffer->getWidth() != width || framebuffer->getHeight() != height)
+		return false;
+
+	// Two conversions are needed here that the DirectX backends get for free.
+	//
+	// 1. GL framebuffers are BOTTOM-UP: glReadPixels row 0 is the LAST
+	//    scanline. The wire format is top-down, so the rows have to be
+	//    reversed. (This is why the TEST_AUTOMATION screenshot path passes
+	//    invertY=true for GL and false for Vulkan.)
+	// 2. The target is RGBA8, the contract is BGRA.
+	//
+	// GL_BGRA is core in desktop GL but on GLES it needs
+	// EXT_read_format_bgra, and asking for an unsupported format is an
+	// INVALID_ENUM rather than a graceful fallback. So use it only on desktop
+	// GL and swizzle on the CPU otherwise - ~0.3ms at 640x480, paid only by
+	// GLES builds.
+	const size_t rowBytes = (size_t)width * 4;
+	if (readbackBuffer.size() < rowBytes * height)
+		readbackBuffer.resize(rowBytes * height);
+
+	GLint origFbo = 0;
+	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &origFbo);
+	framebuffer->bind(GL_READ_FRAMEBUFFER);
+	// No glPixelStorei needed: at 4 bytes per pixel every row is already
+	// 4-byte aligned, which the default GL_PACK_ALIGNMENT of 4 satisfies. Not
+	// touching it keeps this from leaving global GL state changed behind us.
+
+	bool swizzle = true;
+#if !defined(GLES) && !defined(GLES2)
+	swizzle = gl.is_gles;
+#endif
+
+	// Synchronous: this stalls until the GPU has finished the frame. Deliberate
+	// - it costs a pipeline flush but zero frames of latency.
+	glReadPixels(0, 0, width, height, swizzle ? GL_RGBA : GL_BGRA,
+			GL_UNSIGNED_BYTE, readbackBuffer.data());
+
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, origFbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, origFbo);
+
+	if (glGetError() != GL_NO_ERROR)
+		return false;
+
+	// Reverse the rows into the caller's buffer, swizzling R/B on the way if we
+	// had to read RGBA.
+	for (int y = 0; y < height; y++)
+	{
+		const u8 *src = readbackBuffer.data() + (size_t)(height - 1 - y) * rowBytes;
+		u8 *out = dst + (size_t)y * rowBytes;
+		if (!swizzle)
+		{
+			memcpy(out, src, rowBytes);
+		}
+		else
+		{
+			for (int x = 0; x < width; x++, src += 4, out += 4)
+			{
+				out[0] = src[2]; // B <- R
+				out[1] = src[1]; // G
+				out[2] = src[0]; // R <- B
+				out[3] = src[3]; // A
+			}
+		}
+	}
+
+	return true;
+}
+#endif
+
 bool OpenGLRenderer::renderLastFrame()
 {
 	GlFramebuffer *framebuffer = gl.ofbo2.ready ? gl.ofbo2.framebuffer.get() : gl.ofbo.framebuffer.get();

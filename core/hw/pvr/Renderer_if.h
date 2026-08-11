@@ -68,6 +68,30 @@ struct Renderer
 	virtual void DrawOSD(bool clear_screen) { }
 
 	virtual BaseTextureCacheData *GetTexture(TSP tsp, TCW tcw) { return nullptr; }
+
+#ifdef USE_GROOVY
+	// Copy the finished emulated frame into dst as tightly-packed BGRA8,
+	// top-down, stride = width * 4. Returns false if this backend cannot (the
+	// default), which the caller reports as a visible refusal.
+	//
+	// Called from inside Render(), at the point the backend's offscreen target
+	// holds the final scaled image and BEFORE DrawOSD()/displayFramebuffer().
+	// That ordering is the whole point: every ImGui overlay - flycast's OSD and
+	// Fightcade's player names, win counts, ping and chat - is a later pass into
+	// the swapchain, never into this target, so what we read is the game alone.
+	//
+	// The read is synchronous. It costs a GPU pipeline flush, but zero frames of
+	// latency, and flycast has idle slack in every frame (the FixedFrequency
+	// spin, or WaitSync when Groovy owns the clock) that absorbs it.
+	//
+	// If a driver is ever found that stalls badly enough for that to hurt, the
+	// escape hatch is a deferred readback: keep K staging buffers and map the
+	// one from N frames ago, trading one frame (~16ms) of latency for no stall.
+	// That is deliberately not implemented - a setting for it existed briefly
+	// and was removed, because an inert control claiming to trade latency for
+	// stability is worse than no control.
+	virtual bool ReadFrame(u8 *dst, int width, int height) { return false; }
+#endif
 };
 
 extern Renderer* renderer;

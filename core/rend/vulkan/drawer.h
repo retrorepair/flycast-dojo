@@ -286,6 +286,18 @@ public:
 		return true;
 	}
 
+#ifdef USE_GROOVY
+	// The finished frame, before PresentFrame() blits it to the swapchain and
+	// the ImGui overlay is recorded on top. eR8G8B8A8Unorm, left in
+	// eShaderReadOnlyOptimal by the render pass.
+	vk::Image GetLastFrameImage() const
+	{
+		if (colorAttachments.empty())
+			return nullptr;
+		return colorAttachments[GetCurrentImage()]->GetImage();
+	}
+#endif
+
 protected:
 	vk::CommandBuffer BeginRenderPass() override;
 	u32 GetSwapChainSize() override { return 2; }

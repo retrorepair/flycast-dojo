@@ -209,6 +209,16 @@ public:
 	vk::RenderPass GetRenderPass() const { return screenPipelineManager->GetRenderPass(false, true); }
 	vk::CommandBuffer GetCurrentCommandBuffer() const { return currentCommandBuffer; }
 
+#ifdef USE_GROOVY
+	// See ScreenDrawer::GetLastFrameImage - same contract, different attachment.
+	vk::Image GetLastFrameImage() const
+	{
+		if (finalColorAttachments.empty())
+			return nullptr;
+		return finalColorAttachments[GetCurrentImage()]->GetImage();
+	}
+#endif
+
 protected:
 	vk::Framebuffer GetFinalFramebuffer() const override { return *framebuffers[GetCurrentImage()]; }
 

@@ -279,4 +279,70 @@ Option<bool, false> UseRawInput("RawInput", false, "input");
 Option<std::string, false> LuaFileName("LuaFileName", "flycast.lua");
 #endif
 
+#ifdef USE_GROOVY
+// On by default: this build exists for the Groovy MiSTer path, so requiring an
+// opt-in would leave the feature off for everyone who did not go looking.
+//
+// Consequence worth knowing: applyConfigOverrides() runs at Emulator::start()
+// whenever this is set, so a user with no MiSTer attached still gets native
+// 480p forced, widescreen/rotate/stretch off, frameskip off, vsync off and
+// single-threaded emulation - and those widgets greyed out. Turn this off to
+// get them back. The stream itself fails softly: one visible refusal, a 5s
+// connect back-off, and under netplay it stands down for the session rather
+// than stuttering a live match.
+Option<bool, false> GroovyEnable("Enable", true, "groovy");
+// The direct-cable default from the integration guide. A GbE cable straight
+// between host and MiSTer, no switch and no Wi-Fi, is what the latency figures
+// assume.
+Option<std::string, false> GroovyHost("Host", "192.168.100.2", "groovy");
+Option<int, false> GroovyPort("Port", 32100, "groovy");
+// Tri-sync: takes 240p at 15kHz and 480p at 31kHz, so it covers every mode a
+// Dreamcast or NAOMI produces without the user choosing. A 15kHz-only monitor
+// still works - 480-line modes come back interlaced and we send them as a
+// progressive framebuffer over an interlaced signal.
+Option<std::string, false> GroovyMonitorPreset("MonitorPreset", "arcade_15_25_31", "groovy");
+Option<std::string, false> GroovySwitchresIni("SwitchresIni", "", "groovy");
+// NLC with the Rice pack at level 1 - the combination the hardware bring-up
+// validated at a locked 60fps, and the only one that reliably holds 480p.
+// RAW cannot hold 480p at all (55MB/s against a ~38MB/s ceiling). LZ4 remains
+// the fallback for a core too old for NLC.
+//
+// NLC costs real CPU on the frame thread; if that turns out to hurt netplay,
+// the Stage 4 telemetry (pack+blit ms, rolling worst case) is what should
+// decide it, not a guess here.
+Option<int, false> GroovyCodec("Codec", 7, "groovy");
+Option<int, false> GroovyNlcPack("NlcPack", 2, "groovy");
+Option<int, false> GroovyNearLevel("NearLevel", 1, "groovy");
+Option<int, false> GroovyRgbMode("RgbMode", 0, "groovy");
+Option<int, false> GroovyMtu("Mtu", 1500, "groovy");
+Option<int, false> GroovyVCountSync("VCountSync", 0, "groovy");
+Option<int, false> GroovyFdMarginNs("FdMarginNs", 0, "groovy");
+Option<bool, false> GroovyCrtSafetyCap("CrtSafetyCap", true, "groovy");
+Option<bool, false> GroovyAutoReconnect("AutoReconnect", true, "groovy");
+Option<int, false> GroovyLogLevel("LogLevel", 0, "groovy");
+// On by default: this build exists to be tested against real hardware, and
+// the first hardware run produced no diagnostics at all because flycast's own
+// file logging is off by default and a GUI build has no console.
+Option<bool, false> GroovyLogToFile("LogToFile", true, "groovy");
+// Default 2 (MiSTer only): the cabinet's own speakers are the point, and
+// hearing the same audio from the PC half a frame out of step is worse than
+// hearing it from one place.
+//
+// Note this only silences the host once audio has actually gone out on the
+// wire (see submitAudio), so a MiSTer that is unreachable or has Audio off in
+// its OSD cannot leave the user with no sound at all.
+Option<int, false> GroovyAudioMode("AudioMode", 2, "groovy");
+// On by default: the expected setup is a cabinet with its sticks on the MiSTer,
+// so requiring a separate opt-in would leave that user with no working controls
+// and no obvious reason why. It is a no-op unless a session is live, and the
+// pads register alongside any host controller rather than replacing it.
+//
+// The trade is real and unchanged: this adds a network hop versus a stick
+// plugged into the PC. A player chasing minimum input latency should turn it
+// off and plug into the host.
+Option<bool, false> GroovyUseInputs("UseInputs", true, "groovy");
+Option<int, false> GroovyInputPort("InputPort", 32101, "groovy");
+Option<bool, false> GroovyRumble("Rumble", true, "groovy");
+#endif
+
 } // namespace config

@@ -21,6 +21,10 @@
 #include "vulkan.h"
 #include "vulkan_renderer.h"
 #include "drawer.h"
+#ifdef USE_GROOVY
+#include "vk_groovy_readback.h"
+#include "rend/groovy/groovy_capture.h"
+#endif
 
 class VulkanRenderer final : public BaseVulkanRenderer
 {
@@ -79,6 +83,16 @@ public:
 
 			drawer->EndRenderPass();
 
+#ifdef USE_GROOVY
+			// After EndRenderPass, because that is what submits the command
+			// buffer (CommandPool::EndFrame -> SubmitCommandBuffers) - the
+			// attachment does not hold the finished frame until then. Still
+			// well before Present(), which is where Vulkan records the ImGui
+			// overlay, so the CRT gets the game alone.
+			if (!pvrrc.isRTT && !config::EmulateFramebuffer)
+				groovy::onFrameReady((int)viewport.width, (int)viewport.height);
+#endif
+
 			return !pvrrc.isRTT;
 		} catch (const vk::SystemError& e) {
 			// Sometimes happens when resizing the window
@@ -96,6 +110,15 @@ public:
 			return screenDrawer.PresentFrame();
 	}
 
+#ifdef USE_GROOVY
+	bool ReadFrame(u8 *dst, int width, int height) override
+	{
+		if ((u32)width != viewport.width || (u32)height != viewport.height)
+			return false;
+		return groovyReadback.read(screenDrawer.GetLastFrameImage(), width, height, dst);
+	}
+#endif
+
 protected:
 	void resize(int w, int h) override
 	{
@@ -111,6 +134,9 @@ private:
 	ScreenDrawer screenDrawer;
 	TextureDrawer textureDrawer;
 	bool emulateFramebuffer = false;
+#ifdef USE_GROOVY
+	GroovyVkReadback groovyReadback;
+#endif
 };
 
 Renderer* rend_Vulkan()
