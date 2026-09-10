@@ -1326,18 +1326,18 @@ void GuiSettings::settings_body_mister(ImVec2 normal_padding)
 				"visually indistinguishable from lossless on a CRT.");
 	}
 	{
-		// RGB565 is not offered with NLC: the combination is broken upstream
-		// (verified with no flycast code in the path - the picture is almost
-		// entirely wrong). Coerce rather than just hiding it, so a config that
-		// already has 565 saved does not sit in an unreachable state.
+		// NLC is RGB888 only: the FPGA decoder is three planes at three bytes per
+		// pixel, so RGBA888 desyncs the stream and RGB565 the encoder refuses. The
+		// client rejects both at CmdInit. Coerce rather than just hiding them, so a
+		// config that already has one saved does not sit in an unreachable state.
 		const bool nlc = config::GroovyCodec == 7;
-		if (nlc && config::GroovyRgbMode == 2)
+		if (nlc && config::GroovyRgbMode != 0)
 			config::GroovyRgbMode.set(0);
 
 		static const char *rgb[] = { "RGB888", "RGBA888", "RGB565" };
-		groovyComboBox("Colour Depth", config::GroovyRgbMode, rgb, nlc ? 2 : 3,
-				nlc ? "RGB565 is unavailable with NLC - the combination is broken in the codec. "
-						"Switch to LZ4 if you need it for bandwidth."
+		groovyComboBox("Colour Depth", config::GroovyRgbMode, rgb, nlc ? 1 : 3,
+				nlc ? "NLC is RGB888 only - the FPGA decoder cannot carry an alpha channel or "
+						"565 pixels. Switch to LZ4 if you need RGB565 for bandwidth."
 					: "RGB565 halves bandwidth at the cost of banding.");
 	}
 	{
@@ -1433,11 +1433,8 @@ void GuiSettings::settings_body_mister(ImVec2 normal_padding)
 			if (status.reconnects > 0)
 				ImGui::Text("Reconnects: %u", status.reconnects);
 
-			// Straight from the FPGA. vramSynced going low is the red-screen
-			// condition and is the single most useful thing to surface.
-			if (!status.vramSynced)
-				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f),
-						"MiSTer lost sync with the stream (check bandwidth - try LZ4 or RGB565)");
+			// The only stream-health bit worth showing - vramSynced reads 1 through
+			// real underruns, so it is not surfaced. See OutputStatus.
 			if (status.frameskip)
 				ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "MiSTer is skipping frames");
 

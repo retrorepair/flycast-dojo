@@ -46,8 +46,9 @@ struct OutputStatus
 	uint32_t lastBlitBytes = 0;
 	uint32_t reconnects = 0;
 
-	// Straight from the FPGA's ACK.
-	bool vramSynced = true;
+	// Straight from the FPGA's ACK. vramSynced is not carried: it cannot detect the
+	// underrun its name suggests (self-clears within a raster line, sampled once
+	// per blit) and only ever means "the core is up". frameskip is the real signal.
 	bool frameskip = false;
 	bool audioEnabled = false;
 
@@ -99,8 +100,8 @@ bool submitAudio(const void *frames, int frameCount);
 */
 void waitSync();
 
-// Holds an idle session open against the core's idle timeout (5s default).
-// Gated on wire silence, so at 60fps it never actually sends.
+// Holds an idle session open against the core's idle timeout (5s default), which
+// openSession() opts into. Gated on wire silence, so at 60fps it never sends.
 void keepAlive();
 
 // True when the CRT raster is the frame clock, which is offline only -

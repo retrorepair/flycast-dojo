@@ -175,6 +175,19 @@ static SessionParams currentConfigParams()
 	p.audioOn = config::GroovyAudioMode != 0;
 	p.nlcPack = config::GroovyNlcPack;
 	p.nearLevel = config::GroovyNearLevel;
+
+	// NLC is RGB888 only - CmdInit returns -1 for anything else. Substitute rather
+	// than refuse, openSession() reports it. 565 is picked for bandwidth so keep
+	// it and drop to LZ4; RGBA's alpha is never displayed, so drop it and keep NLC.
+	//
+	// Must happen here, not in openSession(): submitFrame() picks its packer from
+	// the same rgbMode, so coercing at CmdInit alone would pack RGBA888 into a
+	// buffer the core was told is RGB888.
+	if (p.codec == 7 && p.rgbMode == RGB_565)
+		p.codec = 1;
+	else if (p.codec == 7 && p.rgbMode != RGB_888)
+		p.rgbMode = RGB_888;
+
 	return p;
 }
 
@@ -332,11 +345,12 @@ static bool openSession()
 	resetSessionCounters();
 	closeSent = false;
 
-	// Both of these MUST precede CmdInit. BindInputs opens the inputs socket and
-	// sends the subscribe; setInputCaps rides CMD_INIT byte[5], and a 6-byte
-	// CMD_INIT is silently discarded by cores older than version 2 - which is
-	// why the client probes with CMD_GET_VERSION first and drops the caps byte
-	// itself. Do not write an app-level v2->v1 fallback; that is the client's job.
+	// All of these MUST precede CmdInit. BindInputs opens the inputs socket and
+	// sends the subscribe; setInputCaps and setKeepAlive ride CMD_INIT byte[5],
+	// and a 6-byte CMD_INIT is silently discarded by cores older than version 2 -
+	// which is why the client probes with CMD_GET_VERSION first and drops the caps
+	// byte itself. Do not write an app-level v2->v1 fallback; that is the client's
+	// job.
 	if (config::GroovyUseInputs)
 	{
 		if (!inputsBound)
@@ -354,17 +368,22 @@ static bool openSession()
 		gm.setInputCaps(GM_CAP_INPUTS_V2 | GM_CAP_RUMBLE);
 	}
 
+	// Opt into the core's idle timeout. From NLC v1.4 the core only reaps clients
+	// advertising GM_CAP_KEEPALIVE, so without this keepAlive() defends against
+	// nothing and a killed flycast holds the CRT on its last frame. Safe against
+	// older cores too, where opting in asks for what they already did.
+	//
+	// Not an input capability; do not fold it into setInputCaps.
+	gm.setKeepAlive(1);
+
 	gm.setAutoReconnect(config::GroovyAutoReconnect ? 1 : 0);
 
-	int codec = params.codec;
-	// NLC + RGB565 is broken upstream (verified with no flycast code in the
-	// path). Substitute rather than refuse - silently-but-loudly - so the user
-	// still gets a picture.
-	if (codec == 7 && params.rgbMode == RGB_565)
-	{
-		codec = 1;
+	// currentConfigParams() has already reconciled codec against rgbMode. Report it
+	// here so it fires once per session open rather than once per frame.
+	if (params.codec != config::GroovyCodec)
 		notifyRefusal(LOGKEY_CODEC, "NLC does not support RGB565 - using LZ4 for this session");
-	}
+	else if (params.rgbMode != config::GroovyRgbMode)
+		notifyRefusal(LOGKEY_CODEC, "NLC does not support RGBA888 - using RGB888 for this session");
 
 	// NLC entropy pack and near level. These MUST be set before CmdInit - they
 	// ride CMD_INIT byte[1] bits [7] and [3:2] alongside the codec itself.
@@ -376,11 +395,12 @@ static bool openSession()
 	// core's ingest ceiling, so frames arrived truncated - visible as
 	// corruption along the bottom of the picture, with the core reporting
 	// fskip on essentially every frame. The client's own comment on those
-	// defaults says it: "rice+near1 clears the /59 ingest ceiling".
+	// defaults says it: Rice "with near level 1 fits under the HPS ingest
+	// ceiling".
 	//
-	// Only meaningful for NLC, and deliberately not sent otherwise so the
-	// LZ4 substitution path below cannot leave stale NLC bits in byte[1].
-	if (codec == 7)
+	// Only meaningful for NLC, and deliberately not sent otherwise so the LZ4
+	// substitution cannot leave stale NLC bits in byte[1].
+	if (params.codec == 7)
 	{
 		gm.setNlcPack((uint8_t)params.nlcPack);
 		gm.setNearLevel((uint8_t)params.nearLevel);
@@ -388,7 +408,7 @@ static bool openSession()
 
 	// Rate and channels are fixed for the session by CMD_INIT, which is why
 	// audioOn is part of SessionParams.
-	const int rc = gm.CmdInit(params.host.c_str(), (uint16_t)params.port, codec,
+	const int rc = gm.CmdInit(params.host.c_str(), (uint16_t)params.port, params.codec,
 			params.audioOn ? AUDIO_RATE : 0,
 			params.audioOn ? AUDIO_CHANNELS : 0,
 			(uint8_t)params.rgbMode, (uint16_t)params.mtu);
@@ -412,14 +432,14 @@ static bool openSession()
 	// the client's defaults, and there was no host-side way to see it. Anyone
 	// reading this line should be able to tell what CMD_INIT byte[1] will be
 	// without decoding it by hand.
-	if (codec == 7)
+	if (params.codec == 7)
 		logAlways("connected to %s:%d (NLC, pack %s, near %d, rgb %d, mtu %d, audio %s)",
 				params.host.c_str(), params.port,
 				params.nlcPack >= 2 ? "Rice" : "Tiled", params.nearLevel,
 				params.rgbMode, params.mtu, params.audioOn ? "on" : "off");
 	else
 		logAlways("connected to %s:%d (codec %d, rgb %d, mtu %d, audio %s)",
-				params.host.c_str(), params.port, codec, params.rgbMode, params.mtu,
+				params.host.c_str(), params.port, params.codec, params.rgbMode, params.mtu,
 				params.audioOn ? "on" : "off");
 	return true;
 }
@@ -536,17 +556,20 @@ void submitFrame(const uint8_t *bgra, int width, int height)
 	if (bgra == nullptr || width <= 0 || height <= 0)
 		return;
 
-	const RgbMode rgbMode = (RgbMode)(int)config::GroovyRgbMode;
+	// One resolve for both the packer and the staleness check, so the pixels we
+	// pack cannot disagree with the RGB mode CMD_INIT declared.
+	const SessionParams params = currentConfigParams();
+	const RgbMode rgbMode = (RgbMode)params.rgbMode;
 	const uint32_t bpp = wireBytesPerPixel(rgbMode);
 	if (bpp == 0)
 	{
-		notifyRefusal(LOGKEY_CODEC, "unsupported RGB mode %d", (int)config::GroovyRgbMode);
+		notifyRefusal(LOGKEY_CODEC, "unsupported RGB mode %d", params.rgbMode);
 		return;
 	}
 
 	// Reopen if the user changed something that rides CMD_INIT. Codec and RGB
 	// mode cannot be changed mid-session; they are baked into CMD_INIT bytes.
-	if (sessionIsOpen && !(openParams == currentConfigParams()))
+	if (sessionIsOpen && !(openParams == params))
 	{
 		closeSession("session parameters changed");
 		lastConnectFailMs = 0;
@@ -689,6 +712,9 @@ void keepAlive()
 	if (!config::GroovyEnable || !sessionIsOpen || shutdownRequested)
 		return;
 
+	// The other half of openSession()'s setKeepAlive(1): the timeout applies only
+	// because we asked for it, so lapsing here costs the session.
+	//
 	// Gated on wire silence rather than a free-running timer, so it is
 	// structurally impossible for this to fire during normal play: the blit
 	// path refreshes lastWireMs every ~16ms at 60fps. It exists for the times
@@ -806,7 +832,6 @@ void getStatus(OutputStatus& out)
 	out.haveModeline = haveModeline;
 	out.modeline = currentModeline;
 	out.monitorPreset = switchres.preset();
-	out.vramSynced = gm.fpga.vramSynced != 0;
 	out.frameskip = gm.fpga.vgaFrameskip != 0;
 	out.audioEnabled = gm.fpga.audio != 0;
 	out.packBlitMs = packBlitMs;
