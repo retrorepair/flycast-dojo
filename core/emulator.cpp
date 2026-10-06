@@ -50,7 +50,13 @@
 #include "dojo/DojoSession.hpp"
 #include "lua/lua.h"
 
-settings_t settings;
+// Constructed before any default-priority global, because some of them read it from
+// their own constructors: dojo_file (core/dojo/DojoFile.cpp) runs DojoFile::Reset ->
+// RefreshFileDefinitions -> get_readonly_data_path -> get_game_dir, which reads
+// settings.content.path. Whether that worked was down to the order the linker happened
+// to emit the two translation units' initialisers in; with GCC 15 it comes out the wrong
+// way round and the std::string read segfaults before main() is reached.
+settings_t settings __attribute__((init_priority(101)));
 constexpr float WINCE_DEPTH_SCALE = 0.01f;
 
 static void loadSpecialSettings()
